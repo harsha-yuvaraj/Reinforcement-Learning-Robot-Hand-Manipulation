@@ -8,7 +8,7 @@ from gymnasium import spaces
 
 from simulation import Simulation
 
-MAX_EPISODE_STEPS = 300
+MAX_EPISODE_STEPS = 30 # Original was 300
 
 class CanRotateEnv(gym.Env):
     metadata = {'render_modes': ['human'], 'render_fps': 30}
@@ -36,7 +36,7 @@ class CanRotateEnv(gym.Env):
         }
         
         # Define action and observation spaces
-        self.action_space = spaces.Box(low=-0.03, high=0.03, shape=(16,), dtype=np.float32)
+        self.action_space = spaces.Box(low=-0.08, high=0.08, shape=(16,), dtype=np.float32) # low = -0.03 and high = 0.03 orginally
         obs_size = len(self.sim.hand_joint_ids) + 7
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(obs_size,), dtype=np.float32)
 

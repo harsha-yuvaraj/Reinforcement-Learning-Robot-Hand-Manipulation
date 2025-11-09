@@ -42,8 +42,8 @@ def print_object_status(sim, obj_body_id):
     obj_z_rot = get_object_z_rotation(sim, obj_body_id)
     
     # Print to console
-    print(f"  > Object Position (x, y, z):  ({obj_pos[0]:.4f}, {obj_pos[1]:.4f}, {obj_pos[2]:.4f})")
-    print(f"  > Object Z Rotation (degrees): {obj_z_rot:.2f}°")
+    print(f"\t - Object Position (x, y, z):  ({obj_pos[0]:.4f}, {obj_pos[1]:.4f}, {obj_pos[2]:.4f})")
+    print(f"\t - Object Z Rotation (degrees): {obj_z_rot:.2f}°")
 
 
 # --- Main Script ---
