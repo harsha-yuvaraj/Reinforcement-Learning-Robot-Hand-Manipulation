@@ -1,72 +1,50 @@
-# inhand_test.py (Student Skeleton)
+# inhand_test.py
 import time
+import numpy as np
 from inhand_env import CanRotateEnv
-from hand_movement_test import get_object_z_rotation, print_object_status
-import mujoco  
-import numpy as np 
-from scipy.spatial.transform import Rotation as R
+from dqn_agent import DQNAgent 
+from actions_helper import discrete_to_continuous_action
 
-# --- TODO: Import your agent class ---
-# from agent import MyRLAgent 
-
-# --- Configuration ---
-MODEL_PATH = "my_agent_final.pth" # Path to your saved student model
+MODEL_PATH = "agent_final.pth" # Ensure this matches your save name
 EPISODES_TO_RUN = 20
 
-# --- TODO: Load the environment ---
-env = CanRotateEnv(render_mode="human")
+env = CanRotateEnv(render_mode="human") # Human mode to see the robot
 
-# --- TODO: Load your trained agent ---
-# agent = MyRLAgent(
-#     obs_space_shape=env.observation_space.shape,
-#     action_space_shape=env.action_space.shape,
-#     device='cpu'
-# )
-# try:
-#     agent.load_model(MODEL_PATH)
-#     print(f"Successfully loaded model from {MODEL_PATH}")
-# except Exception as e:
-#     print(f"Error loading model: {e}")
-#     exit()
+# Initialize Agent
+agent = DQNAgent(
+    state_dim=env.observation_space.shape[0],
+    action_dim=4,
+    device='cpu' # Usually CPU is fine for inference
+)
 
+# Load Weights
+try:
+    agent.load_model(MODEL_PATH)
+    print(f"Loaded {MODEL_PATH}")
+except Exception as e:
+    print(f"Error: {e}")
+    exit()
 
-# --- Run the evaluation ---
 for episode in range(EPISODES_TO_RUN):
-    print(f"--- Starting Episode {episode + 1}/{EPISODES_TO_RUN} ---")
-    
-    # --- TODO: Reset the environment ---
     obs, info = env.reset()
-    
     terminated = False
     truncated = False
-    total_reward = 0
     step = 0
     
+    print(f"\nEpisode {episode+1}")
     while not (terminated or truncated):
+        # 1. Get Best Action (Epsilon = 0 for pure exploitation)
+        action_idx = agent.get_action(obs, epsilon=0.0)
         
-        # --- TODO: Get a deterministic action from your agent ---
-        # The 'deterministic=True' part is key for testing
-        # action = agent.get_action(obs, deterministic=True)
-        action = env.action_space.sample() # Placeholder: Replace with your agent's action
+        # 2. Translate
+        cont_action = discrete_to_continuous_action(action_idx)
         
-        # --- Print-out of the action taken at each time step ---
-        print(f"  STEP {step} | ACTION: {np.array2string(action, precision=4, suppress_small=True, max_line_width=np.inf)}")
-
-        # --- TODO: Step the environment ---
-        obs, reward, terminated, truncated, info = env.step(action)
-
-        # --- Print-out of the location and orientation ---
-        print_object_status(env.sim, env.obj_body_id)
+        # 3. Step
+        obs, reward, terminated, truncated, info = env.step(cont_action)
         
-        total_reward += reward
+        # Print action to debug
+        print(f"\t Step {step} | Action: {action_idx}")
         step += 1
-        
-        # Render/sleep is handled by the environment's step/render methods
-        time.sleep(1/60) # Keep visualization smooth
-        
-    # print(f"Episode {episode + 1} finished. Total Reward: {total_reward:.2f}")
-    print(f"Episode {episode + 1} finished.")
+        time.sleep(0.02) # Slow down for visualization
 
-# Clean up
 env.close()
-print("\nEvaluation finished.")
