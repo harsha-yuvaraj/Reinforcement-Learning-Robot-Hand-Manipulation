@@ -1,116 +1,98 @@
 import os
-import csv
 import numpy as np
-import time
 from inhand_env import CanRotateEnv
 from dqn_agent import DQNAgent
 from actions_helper import discrete_to_continuous_action
 
 # --- Configuration ---
-TOTAL_TIMESTEPS = 100000  # Increase this for full training (e.g. 1M)
+MAX_EPISODES = 600       
 LEARNING_RATE = 3e-4
-GAMMA = 0.99
 BATCH_SIZE = 64
-BUFFER_SIZE = 100000
 EPSILON_START = 1.0
 EPSILON_END = 0.05
-EPSILON_DECAY = 0.9995
-TARGET_UPDATE_FREQ = 1000  # Steps between target net updates
+# Decay tuned for ~600 eps * ~150 steps/ep = ~90,000 steps
+EPSILON_DECAY = 0.99995 
+TARGET_UPDATE_FREQ = 1000 
 DEVICE = 'cpu' 
 
-# Logging Setup
 log_dir = "training_logs/"
 os.makedirs(log_dir, exist_ok=True)
-log_file_path = os.path.join(log_dir, "training_log.csv")
+log_file_path = os.path.join(log_dir, "training_log.txt")
 
-# Initialize CSV Header
-with open(log_file_path, mode='w', newline='') as file:
-    writer = csv.writer(file)
-    writer.writerow(["Episode", "Steps", "Total_Reward", "Avg_Loss", "Epsilon"])
+with open(log_file_path, mode='w') as file:
+    file.write("Episode\tSteps\tReward\tLoss\tEpsilon\tSuccess\n")
 
-# --- Initialization ---
-env = CanRotateEnv(render_mode="headless") # Use "human" to debug movements
-agent = DQNAgent(
-    state_dim=env.observation_space.shape[0],
-    action_dim=4,  # We defined 4 discrete actions above
-    lr=LEARNING_RATE,
-    gamma=GAMMA,
-    device=DEVICE
-)
+env = CanRotateEnv(render_mode="headless") 
+agent = DQNAgent(env.observation_space.shape[0], 4, lr=LEARNING_RATE, gamma=0.99, device=DEVICE)
 
-print("Deep Q-Learning Training Started...")
+print(f"Training Started (Total {MAX_EPISODES} Episodes)...")
+
 obs, _ = env.reset()
-global_step = 0
 epsilon = EPSILON_START
 episode_num = 0
+global_step = 0
 
-# Variables for episode tracking
 curr_episode_reward = 0
 curr_episode_steps = 0
 episode_losses = []
+best_reward = -float('inf') 
 
-while global_step < TOTAL_TIMESTEPS:
+while episode_num < MAX_EPISODES:
     
-    # 1. Select Action (Discrete)
+    # 1. Action
     action_idx = agent.get_action(obs, epsilon)
-    
-    # 2. Translate to Continuous for Env
     cont_action = discrete_to_continuous_action(action_idx)
     
-    # 3. Step Environment
+    # 2. Step
     next_obs, reward, terminated, truncated, info = env.step(cont_action)
     done = terminated or truncated
     
-    # 4. Clip Reward (Crucial for stability in RL)
-    # The env gives big rewards (velocity * 10). Clipping helps gradients.
-    clipped_reward = np.clip(reward, -10.0, 10.0)
+    # 3. Store
+    scaled_reward = reward * 0.1 
+    agent.memory.push(obs, action_idx, scaled_reward, next_obs, done)
     
-    # 5. Store in Buffer
-    agent.memory.push(obs, action_idx, clipped_reward, next_obs, done)
-    
-    # 6. Train Agent
+    # 4. Train
     loss = agent.learn(BATCH_SIZE)
-    if loss != 0:
-        episode_losses.append(loss)
+    if loss != 0: episode_losses.append(loss)
     
-    # 7. Update Target Network
+    # 5. Update Target
     if global_step % TARGET_UPDATE_FREQ == 0:
         agent.update_target_network()
         
-    # Update state and counters
     obs = next_obs
     curr_episode_reward += reward
     global_step += 1
     curr_episode_steps += 1
     
-    # Decay Epsilon
     if epsilon > EPSILON_END:
         epsilon *= EPSILON_DECAY
 
-    # --- Episode End Handling ---
+    # --- Episode End ---
     if done:
         episode_num += 1
         avg_loss = np.mean(episode_losses) if episode_losses else 0
         
-        # Log to Console
-        print(f"Ep {episode_num} | Steps: {curr_episode_steps} | Reward: {curr_episode_reward:.2f} | Loss: {avg_loss:.4f} | Eps: {epsilon:.3f}")
+        # Check Success based on the Environment's Strict Logic
+        is_success = "YES" if curr_episode_reward > 50 else "NO"
         
-        # Log to CSV
-        with open(log_file_path, mode='a', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow([episode_num, curr_episode_steps, curr_episode_reward, avg_loss, epsilon])
+        print(f"Ep {episode_num}/{MAX_EPISODES} | Steps: {curr_episode_steps} | Reward: {curr_episode_reward:.2f} | Loss: {avg_loss:.4f} | Epsilon: {epsilon:.3f} | Success: {is_success}")
         
-        # Save Model periodically
-        if episode_num % 50 == 0:
+        with open(log_file_path, mode='a') as file:
+            file.write(f"{episode_num}\t{curr_episode_steps}\t{curr_episode_reward:.2f}\t{avg_loss:.4f}\t{epsilon:.4f}\t{is_success}\n")
+        
+        if curr_episode_reward > best_reward:
+            best_reward = curr_episode_reward
+            agent.save_model(f"{log_dir}/best_agent.pth")
+            print(f"\tNew Best Model Saved (Reward: {best_reward:.2f})")
+            
+        if episode_num % 100 == 0:
             agent.save_model(f"{log_dir}/model_ep{episode_num}.pth")
             
-        # Reset for next episode
         obs, _ = env.reset()
         curr_episode_reward = 0
         curr_episode_steps = 0
         episode_losses = []
 
-# Final Save
-agent.save_model("agent_final.pth")
+agent.save_model(f"{log_dir}/agent_final.pth")
 env.close()
-print("Training done.")
+print("Training Complete.")
