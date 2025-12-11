@@ -58,32 +58,26 @@ class CanRotateEnv(gym.Env):
         return np.concatenate([finger_qpos, object_pose])
 
     def _calculate_reward(self):
-        # 1. Get Velocity
         obj_vel = np.zeros(6)
         mujoco.mj_objectVelocity(self.sim.model, self.sim.data, mujoco.mjtObj.mjOBJ_BODY, self.obj_body_id, obj_vel, 0)
         
-        # [vx, vy, vz, wx, wy, wz] -> Indices 3,4,5 are angular velocity
-        angular_velocity_x = obj_vel[3]
-        angular_velocity_y = obj_vel[4]
+        linear_velocity_z = obj_vel[2]
         angular_velocity_z = obj_vel[5] 
 
-        # 2. Track Cumulative Rotation (Z-Axis)
-        dt = self.sim.model.opt.timestep 
-        self.cumulative_rotation += angular_velocity_z * dt
-        abs_rot = abs(self.cumulative_rotation)
-
-        # 3. Base Rewards
-        # Stronger Penalty on X/Y to prevent "Flipping"
-        rotation_reward = (angular_velocity_z * 5.0) - (abs(angular_velocity_x) + abs(angular_velocity_y)) * 2.0
+        # high scaling (15.0) to prioritize rotation
+        reward_rotation = angular_velocity_z * 15.0
         
-        # Survival (Keep close to palm)
+        # a small bonus for lifting helps reduce friction with the palm
+        reward_lift = linear_velocity_z * 5.0
+
+        # survival
         can_pos = self.sim.data.xpos[self.obj_body_id]
         palm_pos = self.sim.data.site_xpos[self.site_id]
         distance_from_palm = np.linalg.norm(can_pos - palm_pos)
-        survival_reward = 0.1 - distance_from_palm
+        reward_survival = 0.1 - distance_from_palm
 
-        # Contact Bonus
-        contact_reward = 0.0
+        # contact
+        reward_contact = 0.0
         fingers_in_contact = set()
         for i in range(self.sim.data.ncon):
             contact = self.sim.data.contact[i]
@@ -91,35 +85,31 @@ class CanRotateEnv(gym.Env):
             if (geom1 in self.fingertip_geom_ids and geom2 == self.can_geom_id): fingers_in_contact.add(geom1)
             elif (geom2 in self.fingertip_geom_ids and geom1 == self.can_geom_id): fingers_in_contact.add(geom2)
         
-        if len(fingers_in_contact) >= 3: contact_reward = 1.0
-        elif len(fingers_in_contact) > 0: contact_reward = 0.2 * len(fingers_in_contact)
+        if len(fingers_in_contact) >= 3:
+            reward_contact = 5.0 
+        elif len(fingers_in_contact) > 0:
+            reward_contact = 0.5 * len(fingers_in_contact)
+            
+        dt = self.sim.model.opt.timestep 
+        self.cumulative_rotation += angular_velocity_z * dt
         
-        # 4. STRICT BOUNDED SUCCESS REWARD (90 - 95 degrees)
-        # 1.57 rad = 90 deg | 1.66 rad = 95 deg
-        success_bonus = 0.0
-        
-        if 1.57 <= abs_rot <= 1.66:
-            success_bonus = 100.0 # Jackpot
-        elif abs_rot > 1.66:
-            success_bonus = -50.0 # OVERSHOOT PENALTY (Went past 95 degrees)
+        reward_success = 0.0
+        if abs(self.cumulative_rotation) >= 1.57: # 90 degrees
+            reward_success = 100.0
 
-        return rotation_reward + survival_reward + contact_reward + success_bonus
+        return reward_rotation + reward_lift + reward_survival + reward_contact + reward_success
 
     def _is_terminated(self):
         can_z_pos = self.sim.data.xpos[self.obj_body_id][2] 
         palm_z_pos = self.sim.data.site_xpos[self.site_id][2] 
         
-        # 1. Dropped Check
+        # Fail: Dropped the object
         dropped = can_z_pos < (palm_z_pos - 0.05)
         
-        # 2. Strict Success Check (Between 90 and 95)
-        abs_rot = abs(self.cumulative_rotation)
-        succeeded = (1.57 <= abs_rot <= 1.66)
+        # Success: Reached 90 degrees
+        succeeded = abs(self.cumulative_rotation) >= 1.57
         
-        # 3. Fail Check (Overshoot > 95)
-        failed_overshoot = abs_rot > 1.66
-
-        return dropped or succeeded or failed_overshoot or self.step_count > MAX_EPISODE_STEPS
+        return dropped or succeeded or self.step_count > MAX_EPISODE_STEPS
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -135,7 +125,6 @@ class CanRotateEnv(gym.Env):
             self.sim.data.ctrl[act_id] = q_palm_up[i] 
         mujoco.mj_forward(self.sim.model, self.sim.data)
 
-        # --- OBJECT RANDOMIZATION ---
         palm_surface_pos = self.sim.data.site_xpos[self.site_id].copy() 
         
         # Noise (+/- 2mm)
@@ -152,7 +141,6 @@ class CanRotateEnv(gym.Env):
 
         mujoco.mj_forward(self.sim.model, self.sim.data)
 
-        # Settle
         for _ in range(20): mujoco.mj_step(self.sim.model, self.sim.data) 
 
         # Reset Hand
@@ -171,7 +159,7 @@ class CanRotateEnv(gym.Env):
         
     def step(self, action):
         target_angles = np.array([self.sim.data.qpos[self.sim.model.jnt_qposadr[j]] for j in self.sim.hand_joint_ids]) + action
-        self.sim.move_gripper_to_angles(target_angles, 0.5) 
+        self.sim.move_gripper_to_angles(target_angles, 0.1) 
 
         if self.render_mode != "headless":
             self.viewer.sync()
